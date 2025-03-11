@@ -29,4 +29,4 @@ All extracted data is saved to a CSV file for easy access and further processing
 
 ## Installation
 
-1. Clone the repository:
+1. Clone the repository:git clone https://github.com/yourusername/telegram-data-extractor.git cd telegram-data-extractor
