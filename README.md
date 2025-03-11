@@ -30,3 +30,18 @@ All extracted data is saved to a CSV file for easy access and further processing
 ## Installation
 
 1. Clone the repository:git clone https://github.com/yourusername/telegram-data-extractor.git cd telegram-data-extractor
+2. ## Sample Output
+
+Here's an example of what the exported CSV file looks like:
+
+![Sample CSV Output](images/sample_output.png)
+## Sample Output
+
+Here's an example of what the exported CSV file looks like:
+
+| Username | Email | Phone Number |
+|----------|-------|--------------|
+| @user1 | user1@example.com | +1 (123) 456-7890 |
+| @telegram_user | contact@gmail.com | +44 7911 123456 |
+| @john_doe | john@company.org | 555-123-4567 |
+
