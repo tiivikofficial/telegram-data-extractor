@@ -88,8 +88,14 @@ class UltimateScraper:
 
     async def save_results(self, target):
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        name = str(target).replace('@', '').replace(' ', '_')
-        base = f"data_{name}_{ts}"
+        
+        # --- FIX: SANITIZE FILENAME ---
+        # Remove URL parts to get just the name
+        clean_name = str(target).replace('https://', '').replace('http://', '').replace('t.me/', '')
+        # Replace invalid OS characters with underscore
+        clean_name = re.sub(r'[\\/*?:"<>|]', '_', clean_name)
+        
+        base = f"data_{clean_name}_{ts}"
         
         # Save JSON
         json_out = {k: list(v) for k, v in self.data.items()}
