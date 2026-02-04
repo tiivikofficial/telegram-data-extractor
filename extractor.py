@@ -621,7 +621,7 @@ class UltimateScraper:
         print(f"  Flagged Messages: {self.stats['flagged_count']}")
         print(f"  Processing Errors: {self.stats['error_count']}")
         
-        risk_colo Fore.RED if self.stats['risk_score'] >= 70 else \
+        risk_color = Fore.RED if self.stats['risk_score'] >= 70 else \
                      Fore.YELLOW if self.stats['risk_score'] >= 40 else Fore.GREEN
         print(f"  {risk_color}Risk Score: {self.stats['risk_score']}/100 " + 
               f"({self.analyzer.get_risk_level(self.stats['risk_score'])}){Style.RESET_ALL}")
