@@ -18,7 +18,7 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn
 from rich.table import Table
 from rich.panel import Panel
-from rich.prompt import Prompt
+from rich.prompt import Confirm, Prompt
 from rich.traceback import install
 
 # Setup
@@ -115,6 +115,14 @@ class DatabaseHandler:
                 UNIQUE(source_id, data_type, value)
             )
         ''')
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS scan_state (
+                source_id INTEGER PRIMARY KEY,
+                last_message_id INTEGER NOT NULL DEFAULT 0,
+                last_scanned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(source_id) REFERENCES sources(id)
+            )
+        ''')
         self.conn.commit()
 
     def add_source(self, username, title):
@@ -139,6 +147,25 @@ class DatabaseHandler:
             console.print(f"[red]DB Error:[/red] {e}")
             return False
         # Commit happens in bulk or at end for speed
+
+    def get_last_message_id(self, source_id):
+        row = self.cursor.execute(
+            "SELECT last_message_id FROM scan_state WHERE source_id = ?",
+            (source_id,),
+        ).fetchone()
+        return int(row[0]) if row else 0
+
+    def set_last_message_id(self, source_id, message_id):
+        self.cursor.execute(
+            """
+            INSERT INTO scan_state (source_id, last_message_id, last_scanned_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(source_id) DO UPDATE SET
+                last_message_id = excluded.last_message_id,
+                last_scanned_at = CURRENT_TIMESTAMP
+            """,
+            (source_id, int(message_id)),
+        )
 
     def commit(self):
         self.conn.commit()
@@ -229,6 +256,12 @@ class CyberScraper:
         return links
 
     @staticmethod
+    def message_link(source, message_id):
+        """Build a public t.me message URL when the source has a username."""
+        source = (source or "").strip().lstrip("@")
+        return f"https://t.me/{source}/{int(message_id)}" if source and message_id else None
+
+    @staticmethod
     def normalize_target(value):
         """Normalize common Telegram target forms without altering invite links."""
         value = (value or "").strip()
@@ -243,7 +276,7 @@ class CyberScraper:
             raise ValueError("Enter a public Telegram username or t.me username link.")
         return value
 
-    async def scrape_target(self, target_username, limit=None, days_back=None):
+    async def scrape_target(self, target_username, limit=None, days_back=None, incremental=False):
         target_username = self.normalize_target(target_username)
         if not target_username:
             raise ValueError("Target username cannot be empty.")
@@ -258,18 +291,31 @@ class CyberScraper:
             source_id = self.db.add_source(target_username, title)
             if source_id is None:
                 raise RuntimeError("Could not create or load the target source in SQLite.")
-            
-            console.print(f"\n[bold yellow]Target acquired:[/bold yellow] {title} [dim](ID: {entity.id})[/dim]")
-            
-            # Calculate date limit
+
+            last_message_id = self.db.get_last_message_id(source_id) if incremental else 0
+            if incremental and last_message_id:
+                console.print(
+                    f"[cyan]Incremental scan:[/cyan] only messages newer than ID "
+                    f"{last_message_id} will be checked."
+                )
+
+            console.print(
+                f"\n[bold yellow]Target acquired:[/bold yellow] {title} "
+                f"[dim](ID: {entity.id})[/dim]"
+            )
+
             offset_date = None
             if days_back:
-                offset_date = datetime.now() - timedelta(days=days_back)
-                console.print(f"[blue]Filter:[/blue] Scraping messages after {offset_date.strftime('%Y-%m-%d')}")
+                offset_date = datetime.now(timezone.utc) - timedelta(days=days_back)
+                console.print(
+                    f"[blue]Filter:[/blue] Scraping messages after "
+                    f"{offset_date.strftime('%Y-%m-%d')}"
+                )
 
             msg_count = 0
             new_items_count = 0
             started_at = datetime.now(timezone.utc)
+            highest_message_id = last_message_id
 
             with Progress(
                 SpinnerColumn(),
@@ -279,41 +325,55 @@ class CyberScraper:
                 TimeRemainingColumn(),
                 console=console
             ) as progress:
-                
-                task = progress.add_task(f"[cyan]Scanning {target_username}...", total=limit if limit else None)
-                
-                async for message in self.client.iter_messages(entity, limit=limit, offset_date=offset_date):
+                task = progress.add_task(
+                    f"[cyan]Scanning {target_username}...",
+                    total=limit if limit else None
+                )
+
+                iterator_kwargs = {
+                    "limit": limit,
+                    "offset_date": offset_date,
+                }
+                if last_message_id:
+                    iterator_kwargs["min_id"] = last_message_id
+
+                async for message in self.client.iter_messages(entity, **iterator_kwargs):
                     msg_text = message.text or ""
-                    caption = message.message or "" # Sometimes text is in message field
+                    caption = message.message or ""
                     full_text = f"{msg_text} {caption}"
-                    
-                    # 1. Regex Extraction
+
                     extracted = self.extract_from_text(full_text)
-                    
-                    # 2. Hidden Links extraction
                     extracted += await self.get_hidden_links(message)
 
-                    # 3. Save only unique findings
                     for dtype, val in extracted:
                         if self.db.insert_data(source_id, dtype, val, message.id):
                             self.stats[dtype] += 1
                             new_items_count += 1
-                    
-                    msg_count += 1
-                    progress.update(task, advance=1)
-                    
-                    if msg_count % 50 == 0:
-                        self.db.commit() # Periodic commit
 
+                    msg_count += 1
+                    highest_message_id = max(highest_message_id, int(message.id))
+                    progress.update(task, advance=1)
+
+                    if msg_count % 50 == 0:
+                        self.db.set_last_message_id(source_id, highest_message_id)
+                        self.db.commit()
+
+            if msg_count:
+                self.db.set_last_message_id(source_id, highest_message_id)
             self.db.commit()
+
             elapsed = datetime.now(timezone.utc) - started_at
             console.print(
                 f"[green]✔ Finished![/green] Scanned {msg_count} messages. "
-                f"Added {new_items_count} new data points in {elapsed.total_seconds():.1f}s."
+                f"Added {new_items_count} new data points in "
+                f"{elapsed.total_seconds():.1f}s."
             )
 
         except FloodWaitError as e:
-            console.print(f"[bold red]!! FLOOD WAIT !![/bold red] Sleeping for {e.seconds} seconds.")
+            console.print(
+                f"[bold red]!! FLOOD WAIT !![/bold red] "
+                f"Sleeping for {e.seconds} seconds."
+            )
             await asyncio.sleep(e.seconds)
         except Exception as e:
             console.print(f"[bold red]Error:[/bold red] {e}")
@@ -342,8 +402,12 @@ class CyberScraper:
         filename_csv = f"export_{clean_name}_{ts}.csv"
         with open(filename_csv, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
-            writer.writerow(['Source', 'Source Title', 'Type', 'Value', 'Message ID', 'Found At'])
-            writer.writerows(rows)
+            writer.writerow([
+                'Source', 'Source Title', 'Type', 'Value',
+                'Message ID', 'Message Link', 'Found At'
+            ])
+            for row in rows:
+                writer.writerow([*row[:4], row[4], self.message_link(row[0], row[4]), row[5]])
 
         # JSON Export
         filename_json = f"export_{clean_name}_{ts}.json"
@@ -354,6 +418,7 @@ class CyberScraper:
                 "type": data_type,
                 "value": value,
                 "message_id": message_id,
+                "message_link": self.message_link(source, message_id),
                 "found_at": found_at,
             }
             for source, source_title, data_type, value, message_id, found_at in rows
@@ -395,9 +460,17 @@ class CyberScraper:
                 
                 days_str = Prompt.ask("How many days back? (Enter for all time)", default="0")
                 days_back = int(days_str) if days_str.isdigit() and int(days_str) > 0 else None
+                incremental = Confirm.ask(
+                    "Only scan messages newer than the previous scan?",
+                    default=False
+                )
 
-                # Reset stats for new run or keep cumulative? Let's keep cumulative for session
-                await self.scrape_target(target, limit, days_back)
+                await self.scrape_target(
+                    target,
+                    limit,
+                    days_back,
+                    incremental=incremental,
+                )
                 self.show_stats()
                 
             elif choice == '2':
