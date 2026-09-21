@@ -11,6 +11,8 @@ Asynchronous Telegram OSINT extraction tool built with Telethon and Rich.
 - 🔎 Extracts emails, Telegram usernames, URLs, IPv4 addresses, selected crypto identifiers, and other configured indicators
 - 🔗 Extracts hidden Telegram text-entity links
 - ⏳ Optional message-count and lookback-day limits
+- ⚡ Incremental scans using per-source message checkpoints
+- 🔗 Public message links in CSV/JSON exports when the target has a username
 - 📊 Rich terminal progress and session statistics
 - 📤 CSV and JSON exports
 - 🛡️ Automatic handling of Telegram FloodWait pauses
@@ -57,8 +59,9 @@ From the menu you can:
 
 1. Scan a public Telegram target by username or t.me link.
 2. Limit the number of messages and/or scan only the last N days.
-3. Export the stored findings for a target to both CSV and JSON.
-4. Exit cleanly and close the SQLite database/session.
+3. Choose a full scan or an incremental scan; incremental mode checks only messages newer than the previous completed checkpoint.
+4. Export the stored findings for a target to both CSV and JSON, including message provenance when available.
+5. Exit cleanly and close the SQLite database/session.
 
 Exported JSON has the shape:
 
