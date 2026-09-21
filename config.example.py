@@ -1,6 +1,10 @@
-# Example configuration file
-# Rename this file to config.py and enter your credentials
+# Example configuration
+# Prefer environment variables in .env; do not commit real credentials.
 
-API_ID = 'YOUR_API_ID'  # Get this from https://my.telegram.org
-API_HASH = 'YOUR_API_HASH'  # Get this from https://my.telegram.org
-PHONE_NUMBER = 'YOUR_PHONE_NUMBER'  # Full phone number with country code
+API_ID = 'YOUR_API_ID'
+API_HASH = 'YOUR_API_HASH'
+PHONE_NUMBER = '+1234567890'
+SESSION_NAME = 'cyber_session'
+
+# Only set this if Telegram 2-Step Verification is enabled.
+# TELEGRAM_2FA_PASSWORD = 'your-telegram-2fa-password'

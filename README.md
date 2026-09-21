@@ -1,124 +1,98 @@
 # 🕵️‍♂️ CyberScraper Pro V2
 
-![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)
-![Telethon](https://img.shields.io/badge/Telethon-Async-green.svg)
-![Rich](https://img.shields.io/badge/UI-Rich-purple.svg)
-![License](https://img.shields.io/badge/License-MIT-orange.svg)
+Asynchronous Telegram OSINT extraction tool built with Telethon and Rich.
 
-**CyberScraper Pro V2** is a high-performance, asynchronous Telegram OSINT tool designed for researchers, data analysts, and cybersecurity professionals. 
+> Use only on public data and in accordance with Telegram's Terms of Service and applicable law. Avoid collecting sensitive personal data without a legitimate purpose and appropriate authorization.
 
-It automates the extraction of sensitive data (Emails, Crypto Wallets, IPs, Cards, etc.) from Telegram public channels and groups using the Telegram API (`Telethon`). It features a modern TUI (Terminal User Interface), SQLite database integration for data persistence, and advanced filtering capabilities.
+## Features
 
----
+- ⚡ Async Telegram message scanning with Telethon
+- 💾 SQLite persistence with duplicate protection
+- 🔎 Extracts emails, Telegram usernames, URLs, IPv4 addresses, selected crypto identifiers, and other configured indicators
+- 🔗 Extracts hidden Telegram text-entity links
+- ⏳ Optional message-count and lookback-day limits
+- 📊 Rich terminal progress and session statistics
+- 📤 CSV and JSON exports
+- 🛡️ Automatic handling of Telegram FloodWait pauses
 
-## 🚀 Key Features
+## Installation
 
-*   **⚡ Asynchronous Core:** Built on `Telethon` and `asyncio` for blazing fast scraping speeds.
-*   **💾 SQLite Database:** Automatically saves every found item to a local database (`scraped_data.db`). No duplicates, no data loss on crashes.
-*   **🎨 Rich UI:** Beautiful terminal interface with real-time progress bars, spinners, and formatted tables.
-*   **🔗 Hidden Link Extraction:** Detects and extracts URLs hidden behind Markdown text (e.g., `[Click Here](http://malicious-site.com)`).
-*   **⏳ Time Travel Filter:** Option to scrape only messages from the last `X` days (e.g., "Last 30 days").
-*   **💎 Advanced Regex Patterns:** Detects modern assets including **TON**, **Solana**, **TRON**, and private keys.
-*   **📂 Export Options:** Export data per target to `.CSV` format for analysis in Excel or other tools.
-*   **🛡️ Session Management:** Handles `FloodWait` errors automatically to prevent account bans.
+Requires Python 3.8+.
 
----
-
-## 👁️ Supported Patterns
-
-CyberScraper Pro V2 automatically detects and categorizes the following data types:
-
-| Category | Patterns Detected |
-| :--- | :--- |
-| **Identity** | Emails, Iranian Mobile Numbers (+98) |
-| **Financial** | Credit Cards (16 digits) |
-| **Crypto (L1)** | Bitcoin (`bc1`, `1`, `3`), Ethereum/BSC (`0x...`) |
-| **Crypto (Alt)** | **TON** (The Open Network), **Solana**, **TRON** |
-| **Network** | IPv4 Addresses, URLs (HTTP/HTTPS) |
-| **Secrets** | Private Keys (Hex), API Keys (e.g., Stripe `sk_live`) |
-
----
-
-## 🛠️ Installation
-
-### Prerequisites
-*   Python 3.8 or higher.
-*   A Telegram account.
-*   API ID and Hash from [my.telegram.org](https://my.telegram.org).
-
-### Step 1: Clone the Repository
 ```bash
-git clone https://github.com/yourusername/CyberScraper-V2.git
-cd CyberScraper-V2
+git clone https://github.com/tiivikofficial/telegram-data-extractor.git
+cd telegram-data-extractor
+python -m venv .venv
+# Linux/macOS:
+source .venv/bin/activate
+# Windows PowerShell:
+# .venv\\Scripts\\Activate.ps1
 
-### Step 2: Install Dependencies
-bash
-pip install telethon rich python-dotenv aiofiles
+python -m pip install -r requirements.txt
+```
 
----
+## Configuration
 
-## ⚙️ Configuration
+Create a .env file in the project root:
 
-1.  Create a file named `.env` in the root directory of the project.
-2.  Add your Telegram credentials (get them from [my.telegram.org](https://my.telegram.org)):
-
-env
+```env
 API_ID=12345678
 API_HASH=your_32_char_api_hash_here
-PHONE_NUMBER=+989123456789
+PHONE_NUMBER=+1234567890
+SESSION_NAME=cyber_session
+# TELEGRAM_2FA_PASSWORD=your_2fa_password
+```
 
-> **Note:** The `PHONE_NUMBER` must include the country code (e.g., +1, +98, +44).
+Get an API ID and API hash from https://my.telegram.org.
 
----
+Never commit your real API credentials, 2FA password, or Telegram session files. On first login, the app asks only for the Telegram verification code. If 2-Step Verification is enabled, set TELEGRAM_2FA_PASSWORD in .env.
 
-## 🖥️ Usage
+## Usage
 
-Run the script using Python:
+```bash
+python extractor.py
+```
 
-bash
-python scraper.py
+From the menu you can:
 
-### Main Menu
-Once launched, you will see the interactive menu:
+1. Scan a public Telegram target by username or t.me link.
+2. Limit the number of messages and/or scan only the last N days.
+3. Export the stored findings for a target to both CSV and JSON.
+4. Exit cleanly and close the SQLite database/session.
 
-1.  **Scrape a Target:**
-*   Enter the `Username` (e.g., `@durov`) or `Link`.
-*   **Limit:** (Optional) Set max number of messages to scan.
-*   **Days Back:** (Optional) Scan only messages from the last X days.
+Exported JSON has the shape:
 
-2.  **Export Data:**
-*   Enter the username you previously scraped.
-*   The tool will generate a `.csv` file with all findings for that target.
+```json
+[
+  {"type": "email", "value": "example@example.com"},
+  {"type": "url", "value": "https://example.com"}
+]
+```
 
-3.  **Exit:**
-*   Closes the session and database connection safely.
+## Database
 
----
+The local scraped_data.db SQLite database contains:
 
-## 🗄️ Database Structure
+- sources: scanned target metadata
+- data: extracted values linked to the source and message ID
 
-The tool uses a lightweight SQLite database (`scraped_data.db`) with two main tables:
+Values are de-duplicated per source and type.
 
-1.  **`sources`**: Stores info about the Channels/Groups scanned.
-2.  **`data`**: Stores the actual extracted items, linked to the source message ID.
+## Detection notes
 
-This ensures that if you scan the same channel twice, **duplicate entries are ignored** automatically.
+The extractor performs lightweight validation for:
 
----
+- IPv4 addresses (each octet must be 0–255)
+- 16-digit credit-card candidates using a Luhn checksum
+- Telegram usernames and email addresses are normalized to lowercase
+- Duplicate (type, value) findings within a message are removed
 
-## ⚠️ Disclaimer
+Detection is pattern-based and should be treated as candidate data, not proof that an identifier is valid or active.
 
-This tool is developed for **educational purposes and legitimate cybersecurity research only** (OSINT).
-*   **Do not** use this tool to infringe on privacy or collect personal data without consent.
-*   **Do not** use this tool for illegal activities such as carding or hacking.
-*   The developer assumes **no responsibility** for how this tool is used.
+## Contributing
 
----
+Pull requests are welcome. For larger changes, open an issue first.
 
-## 🤝 Contributing
+## License
 
-Pull requests are welcome! For major changes, please open an issue first to discuss what you would like to change.
-
-## 📄 License
-
-[MIT](https://choosealicense.com/licenses/mit/)
+MIT.
