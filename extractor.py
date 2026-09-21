@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 # Telethon Imports
 from telethon import TelegramClient, events
 from telethon.tl.types import MessageEntityTextUrl, MessageEntityUrl
-from telethon.errors import FloodWaitError
+from telethon.errors import FloodWaitError, SessionPasswordNeededError
 
 # Rich UI Imports
 from rich.console import Console
@@ -29,7 +29,8 @@ console = Console()
 API_ID = os.getenv('API_ID')
 API_HASH = os.getenv('API_HASH')
 PHONE_NUMBER = os.getenv('PHONE_NUMBER')
-SESSION_NAME = 'cyber_session'
+SESSION_NAME = os.getenv('SESSION_NAME', 'cyber_session')
+TELEGRAM_2FA_PASSWORD = os.getenv('TELEGRAM_2FA_PASSWORD')
 DB_NAME = 'scraped_data.db'
 
 # --- ADVANCED REGEX PATTERNS ---
@@ -153,10 +154,44 @@ class CyberScraper:
         self.stats = {k: 0 for k in PATTERNS.keys()}
 
     async def start(self):
-        console.print(Panel.fit("[bold cyan]CyberScraper Pro V2[/bold cyan]\n[dim]Powered by Telethon & Rich[/dim]"))
-        await self.client.start(phone=PHONE_NUMBER)
-        me = await self.client.get_me()
-        console.print(f"[green]✔ Connected as:[/green] [bold]{me.username}[/bold] (+{me.phone})")
+        """Connect without asking for a username/password unless Telegram requires 2FA."""
+        console.print(
+            Panel.fit(
+                "[bold cyan]CyberScraper Pro V2[/bold cyan]\n"
+                "[dim]Powered by Telethon & Rich[/dim]"
+            )
+        )
+
+        if not PHONE_NUMBER:
+            raise RuntimeError(
+                "PHONE_NUMBER is missing from .env. Set it to your Telegram account phone "
+                "number, including the country code."
+            )
+
+        if await self.client.is_user_authorized():
+            me = await self.client.get_me()
+        else:
+            await self.client.send_code_request(PHONE_NUMBER)
+            code = Prompt.ask("Telegram verification code", password=False).strip()
+            try:
+                await self.client.sign_in(
+                    phone=PHONE_NUMBER,
+                    code=code,
+                )
+            except SessionPasswordNeededError:
+                if not TELEGRAM_2FA_PASSWORD:
+                    raise RuntimeError(
+                        "Telegram 2FA is enabled. Set TELEGRAM_2FA_PASSWORD in .env "
+                        "instead of entering the password interactively."
+                    )
+                await self.client.sign_in(password=TELEGRAM_2FA_PASSWORD)
+            me = await self.client.get_me()
+
+        console.print(
+            f"[green]✔ Connected as:[/green] "
+            f"[bold]{getattr(me, 'username', None) or me.id}[/bold] "
+            f"(+{getattr(me, 'phone', '')})"
+        )
 
     def extract_from_text(self, text):
         """Extract normalized, de-duplicated indicators from message text."""
