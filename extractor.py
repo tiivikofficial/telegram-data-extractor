@@ -4,11 +4,12 @@ import asyncio
 import sqlite3
 import csv
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from dotenv import load_dotenv
 
 # Telethon Imports
-from telethon import TelegramClient, events
+from telethon import TelegramClient
 from telethon.tl.types import MessageEntityTextUrl, MessageEntityUrl
 from telethon.errors import FloodWaitError, SessionPasswordNeededError
 
@@ -17,7 +18,7 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn
 from rich.table import Table
 from rich.panel import Panel
-from rich.prompt import Prompt, IntPrompt
+from rich.prompt import Prompt
 from rich.traceback import install
 
 # Setup
@@ -31,7 +32,7 @@ API_HASH = os.getenv('API_HASH')
 PHONE_NUMBER = os.getenv('PHONE_NUMBER')
 SESSION_NAME = os.getenv('SESSION_NAME', 'cyber_session')
 TELEGRAM_2FA_PASSWORD = os.getenv('TELEGRAM_2FA_PASSWORD')
-DB_NAME = 'scraped_data.db'
+DB_NAME = os.getenv('DB_NAME', 'scraped_data.db')
 
 # --- ADVANCED REGEX PATTERNS ---
 PATTERNS = {
@@ -127,13 +128,16 @@ class DatabaseHandler:
             return None
 
     def insert_data(self, source_id, data_type, value, msg_id):
+        """Insert one finding and report whether a new row was created."""
         try:
             self.cursor.execute(
                 "INSERT OR IGNORE INTO data (source_id, data_type, value, message_id) VALUES (?, ?, ?, ?)",
                 (source_id, data_type, value, msg_id)
             )
-        except:
-            pass 
+            return self.cursor.rowcount == 1
+        except sqlite3.Error as e:
+            console.print(f"[red]DB Error:[/red] {e}")
+            return False
         # Commit happens in bulk or at end for speed
 
     def commit(self):
@@ -154,7 +158,7 @@ class CyberScraper:
         self.stats = {k: 0 for k in PATTERNS.keys()}
 
     async def start(self):
-        """Connect without asking for a username/password unless Telegram requires 2FA."""
+        """Connect using the saved session and only prompt when a login is required."""
         console.print(
             Panel.fit(
                 "[bold cyan]CyberScraper Pro V2[/bold cyan]\n"
@@ -162,15 +166,13 @@ class CyberScraper:
             )
         )
 
-        if not PHONE_NUMBER:
-            raise RuntimeError(
-                "PHONE_NUMBER is missing from .env. Set it to your Telegram account phone "
-                "number, including the country code."
-            )
-
         if await self.client.is_user_authorized():
             me = await self.client.get_me()
         else:
+            if not PHONE_NUMBER:
+                raise RuntimeError(
+                    "PHONE_NUMBER is missing from .env and no authorized Telegram session exists."
+                )
             await self.client.send_code_request(PHONE_NUMBER)
             code = Prompt.ask("Telegram verification code", password=False).strip()
             try:
@@ -226,11 +228,36 @@ class CyberScraper:
                 pass
         return links
 
+    @staticmethod
+    def normalize_target(value):
+        """Normalize common Telegram target forms without altering invite links."""
+        value = (value or "").strip()
+        for prefix in ("https://t.me/", "http://t.me/", "t.me/"):
+            if value.lower().startswith(prefix):
+                value = value[len(prefix):]
+                break
+        value = value.split("?", 1)[0].split("#", 1)[0].strip("/")
+        if value.startswith("@"):
+            value = value[1:]
+        if "/" in value or value.startswith("+"):
+            raise ValueError("Enter a public Telegram username or t.me username link.")
+        return value
+
     async def scrape_target(self, target_username, limit=None, days_back=None):
+        target_username = self.normalize_target(target_username)
+        if not target_username:
+            raise ValueError("Target username cannot be empty.")
+        if limit is not None and limit <= 0:
+            raise ValueError("Limit must be greater than zero.")
+        if days_back is not None and days_back <= 0:
+            raise ValueError("Days back must be greater than zero.")
+
         try:
             entity = await self.client.get_entity(target_username)
             title = getattr(entity, 'title', target_username)
             source_id = self.db.add_source(target_username, title)
+            if source_id is None:
+                raise RuntimeError("Could not create or load the target source in SQLite.")
             
             console.print(f"\n[bold yellow]Target acquired:[/bold yellow] {title} [dim](ID: {entity.id})[/dim]")
             
@@ -242,6 +269,7 @@ class CyberScraper:
 
             msg_count = 0
             new_items_count = 0
+            started_at = datetime.now(timezone.utc)
 
             with Progress(
                 SpinnerColumn(),
@@ -265,11 +293,11 @@ class CyberScraper:
                     # 2. Hidden Links extraction
                     extracted += await self.get_hidden_links(message)
 
-                    # 3. Save to DB
+                    # 3. Save only unique findings
                     for dtype, val in extracted:
-                        self.db.insert_data(source_id, dtype, val, message.id)
-                        self.stats[dtype] += 1
-                        new_items_count += 1
+                        if self.db.insert_data(source_id, dtype, val, message.id):
+                            self.stats[dtype] += 1
+                            new_items_count += 1
                     
                     msg_count += 1
                     progress.update(task, advance=1)
@@ -278,7 +306,11 @@ class CyberScraper:
                         self.db.commit() # Periodic commit
 
             self.db.commit()
-            console.print(f"[green]✔ Finished![/green] Scanned {msg_count} messages. Found {new_items_count} data points.")
+            elapsed = datetime.now(timezone.utc) - started_at
+            console.print(
+                f"[green]✔ Finished![/green] Scanned {msg_count} messages. "
+                f"Added {new_items_count} new data points in {elapsed.total_seconds():.1f}s."
+            )
 
         except FloodWaitError as e:
             console.print(f"[bold red]!! FLOOD WAIT !![/bold red] Sleeping for {e.seconds} seconds.")
@@ -287,16 +319,18 @@ class CyberScraper:
             console.print(f"[bold red]Error:[/bold red] {e}")
 
     async def export_data(self, target_username):
-        """Exports data for a specific target from DB to JSON/CSV"""
+        """Export target findings with source/message metadata to CSV and JSON."""
+        target_username = self.normalize_target(target_username)
         clean_name = re.sub(r'[\\/*?:"<>|]', '_', target_username)
-        ts = datetime.now().strftime("%Y%m%d_%H%M")
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         
         # Fetch from DB
         self.db.cursor.execute("""
-            SELECT d.data_type, d.value 
-            FROM data d 
-            JOIN sources s ON d.source_id = s.id 
+            SELECT s.username, s.title, d.data_type, d.value, d.message_id, d.found_at
+            FROM data d
+            JOIN sources s ON d.source_id = s.id
             WHERE s.username = ?
+            ORDER BY d.found_at ASC, d.id ASC
         """, (target_username,))
         rows = self.db.cursor.fetchall()
         
@@ -308,14 +342,21 @@ class CyberScraper:
         filename_csv = f"export_{clean_name}_{ts}.csv"
         with open(filename_csv, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
-            writer.writerow(['Type', 'Value'])
+            writer.writerow(['Source', 'Source Title', 'Type', 'Value', 'Message ID', 'Found At'])
             writer.writerows(rows)
 
         # JSON Export
         filename_json = f"export_{clean_name}_{ts}.json"
         payload = [
-            {"type": data_type, "value": value}
-            for data_type, value in rows
+            {
+                "source": source,
+                "source_title": source_title,
+                "type": data_type,
+                "value": value,
+                "message_id": message_id,
+                "found_at": found_at,
+            }
+            for source, source_title, data_type, value, message_id, found_at in rows
         ]
         with open(filename_json, 'w', encoding='utf-8') as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
@@ -347,8 +388,7 @@ class CyberScraper:
             
             if choice == '1':
                 target = Prompt.ask("Enter Target Username/Link")
-                # Clean input
-                target = target.replace('https://t.me/', '').replace('@', '').strip()
+                target = self.normalize_target(target)
                 
                 limit_str = Prompt.ask("Limit messages (Enter for all)", default="0")
                 limit = int(limit_str) if limit_str.isdigit() and int(limit_str) > 0 else None
@@ -362,7 +402,7 @@ class CyberScraper:
                 
             elif choice == '2':
                 target = Prompt.ask("Enter Target Username to export")
-                target = target.replace('https://t.me/', '').replace('@', '').strip()
+                target = self.normalize_target(target)
                 await self.export_data(target)
                 
             elif choice == '3':

@@ -30,3 +30,14 @@ def test_normalization_and_deduplication():
 
 def test_trailing_url_punctuation_is_cleaned():
     assert clean_extracted_value("url", "https://example.com/path).") == "https://example.com/path"
+
+
+def test_normalize_target():
+    assert CyberScraper.normalize_target("@Example_Channel") == "Example_Channel"
+    assert CyberScraper.normalize_target("https://t.me/Example_Channel?foo=bar") == "Example_Channel"
+
+
+def test_invalid_target_is_rejected():
+    import pytest
+    with pytest.raises(ValueError):
+        CyberScraper.normalize_target("https://evil.example/path")
