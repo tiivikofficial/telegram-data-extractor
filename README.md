@@ -39,11 +39,13 @@ Create a .env file in the project root:
 API_ID=12345678
 API_HASH=your_32_char_api_hash_here
 PHONE_NUMBER=+1234567890
+SESSION_NAME=cyber_session
+# TELEGRAM_2FA_PASSWORD=your_2fa_password
 ```
 
 Get an API ID and API hash from https://my.telegram.org.
 
-Never commit your real API credentials or Telegram session files.
+Never commit your real API credentials, 2FA password, or Telegram session files. On first login, the app asks only for the Telegram verification code. If 2-Step Verification is enabled, set TELEGRAM_2FA_PASSWORD in .env.
 
 ## Usage
 
