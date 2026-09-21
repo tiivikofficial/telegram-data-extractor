@@ -41,3 +41,9 @@ def test_invalid_target_is_rejected():
     import pytest
     with pytest.raises(ValueError):
         CyberScraper.normalize_target("https://evil.example/path")
+
+
+def test_message_link():
+    assert CyberScraper.message_link("example_channel", 42) == "https://t.me/example_channel/42"
+    assert CyberScraper.message_link("@example_channel", 42) == "https://t.me/example_channel/42"
+    assert CyberScraper.message_link("", 42) is None
